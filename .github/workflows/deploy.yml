@@ -27,8 +27,15 @@ jobs:
             cd /home/deploy/apps/datev
             git fetch origin main
             git reset --hard origin/main
-            docker compose pull || true
+
+            # Clean slate (same pattern as frohzeitrakete deploy)
+            docker compose down --remove-orphans || true
+            docker container prune -f || true
+
             docker compose build
+
+            # Migrations (container is clean, external network is attached fresh)
             docker compose run --rm datev_api alembic upgrade head
+
             docker compose up -d --wait
             docker compose ps
