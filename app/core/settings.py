@@ -28,12 +28,25 @@ class Settings(BaseSettings):
     datev_redirect_uri: str = ""
     datev_discovery_url: str = ""
     datev_scopes: str = "openid profile"
-    # Where to send the browser after a successful OAuth callback.
     datev_post_auth_redirect: str = "https://admin.froehlichdienste.de/admin/buchhaltung/mitarbeiter"
+
+    # DATEV tenant context. Required as path parameter on every API call.
+    datev_consultant_number: str = ""
+    datev_client_number: str = ""
+    datev_default_client_id_path: str = ""  # e.g. "1694291-10357"
 
     @property
     def datev_scopes_list(self) -> list[str]:
         return [s.strip() for s in self.datev_scopes.split() if s.strip()]
+
+    @property
+    def datev_is_sandbox(self) -> bool:
+        return self.datev_environment.lower() == "sandbox"
+
+    @property
+    def datev_platform_path(self) -> str:
+        """'/platform-sandbox' or '/platform' depending on environment."""
+        return "/platform-sandbox" if self.datev_is_sandbox else "/platform"
 
     @property
     def cors_origins_list(self) -> list[str]:
