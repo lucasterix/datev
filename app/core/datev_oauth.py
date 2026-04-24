@@ -136,18 +136,20 @@ def exchange_code(db: Session, code: str, state: str) -> DatevToken:
         raise ValueError("State expired")
 
     doc = _DiscoveryCache.get()
+    # DATEV requires client_secret_basic — client credentials go in the
+    # Authorization header, NOT in the form body (tried form-body first,
+    # got invalid_client from sandbox-api.datev.de).
     payload = {
         "grant_type": "authorization_code",
         "code": code,
         "redirect_uri": settings.datev_redirect_uri,
-        "client_id": settings.datev_client_id,
-        "client_secret": settings.datev_client_secret,
         "code_verifier": pending.code_verifier,
     }
 
     response = httpx.post(
         doc.token_endpoint,
         data=payload,
+        auth=httpx.BasicAuth(settings.datev_client_id, settings.datev_client_secret),
         headers={"Accept": "application/json"},
         timeout=15.0,
     )
@@ -272,9 +274,8 @@ def refresh_if_needed(db: Session, token: DatevToken) -> DatevToken:
         data={
             "grant_type": "refresh_token",
             "refresh_token": token.refresh_token,
-            "client_id": settings.datev_client_id,
-            "client_secret": settings.datev_client_secret,
         },
+        auth=httpx.BasicAuth(settings.datev_client_id, settings.datev_client_secret),
         headers={"Accept": "application/json"},
         timeout=15.0,
     )
