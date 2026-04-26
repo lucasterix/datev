@@ -9,6 +9,8 @@ from app.api import (
     employees,
     health,
     me_echo,
+    onboarding_admin,
+    onboarding_public,
     payroll,
     profile,
     sync_admin,
@@ -50,3 +52,5 @@ app.include_router(employees.router)
 app.include_router(payroll.router)
 app.include_router(profile.router)
 app.include_router(sync_admin.router)
+app.include_router(onboarding_admin.router)
+app.include_router(onboarding_public.router)
