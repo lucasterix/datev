@@ -340,13 +340,25 @@ def update_month_record(month_record_id: int | str, record: dict) -> None:
 # --- health probe ---------------------------------------------------------
 
 
-def ping() -> bool:
+def ping(timeout: float = 3.0) -> bool:
     """Returns True if the bridge answers and DATEVconnect is reachable.
 
+    Short timeout (3s default) so a /health endpoint call from the UI
+    doesn't block on a 30s default httpx timeout when the LuG-PC is off.
     Used by the sync worker to decide whether to drain the
-    pending_operations queue right now or wait."""
+    pending_operations queue right now or wait.
+    """
+    if not settings.datev_local_bridge_url:
+        return False
     try:
-        list_clients()
-        return True
-    except (LocalDatevError, httpx.HTTPError):
+        # Use a lightweight bare-HTTP call so we don't trigger the
+        # default 30s timeout in the regular request wrapper.
+        url = _build_url("/clients")
+        response = httpx.get(
+            url,
+            params={"reference-date": _today_iso()},
+            timeout=timeout,
+        )
+        return response.status_code == 200
+    except (httpx.HTTPError, Exception):  # noqa: BLE001
         return False
