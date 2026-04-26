@@ -44,6 +44,16 @@ class PendingOpOut(BaseModel):
     last_attempt_at: str | None
 
 
+class CalendarRecordOut(BaseModel):
+    id: str | None = None
+    date_of_emergence: str | None = None
+    reason_for_absence_id: str | None = None
+    salary_type_id: int | None = None
+    hours: float | None = None
+    days: float | None = None
+    accounting_month: str | None = None
+
+
 class EmployeeProfile(BaseModel):
     """Merged profile: DATEV stamp + Patti link + pending queue.
 
@@ -68,6 +78,10 @@ class EmployeeProfile(BaseModel):
 
     # Patti link
     patti: dict
+
+    # Movement data — calendar records of the current + previous month,
+    # filtered to entries that look like absences (have a reason_for_absence_id).
+    absences: list[CalendarRecordOut]
 
     # Sync state
     last_datev_synced_at: str | None
@@ -228,6 +242,47 @@ def _ensure_datev_details_loaded(db: Session, e: Employee) -> None:
         logger.warning("lazy_detail_fetch_failed", pnr=e.personnel_number, error=str(exc))
 
 
+def _fetch_recent_absences(personnel_number: int, months_back: int = 2) -> list[CalendarRecordOut]:
+    """Pull the last N months of calendar-records for this employee
+    and keep only entries that look like absences (have a reason).
+
+    DATEV's calendar-records endpoint returns entries whose Zuordnungsmonat
+    matches the reference-date month, so we have to call it per month.
+    Two months covers most active sick-notes; older periods are
+    historical and live in the LuG ASCII archive."""
+    from app.core import datev_local_client
+    from datetime import date as _date
+    from dateutil.relativedelta import relativedelta  # type: ignore[import-not-found]
+
+    today = _date.today()
+    out: list[CalendarRecordOut] = []
+    for offset in range(months_back + 1):
+        target = today - relativedelta(months=offset)
+        first_of_month = target.replace(day=1).isoformat()
+        try:
+            records = datev_local_client.list_calendar_records(
+                personnel_number, reference_date=first_of_month
+            )
+        except Exception:  # noqa: BLE001 — bridge offline / DATEV 5xx
+            continue
+        for r in records:
+            if not (r.get("reason_for_absence_id") or "").strip():
+                continue
+            out.append(
+                CalendarRecordOut(
+                    id=str(r.get("id")) if r.get("id") is not None else None,
+                    date_of_emergence=r.get("date_of_emergence"),
+                    reason_for_absence_id=r.get("reason_for_absence_id"),
+                    salary_type_id=r.get("salary_type_id"),
+                    hours=r.get("hours"),
+                    days=r.get("days"),
+                    accounting_month=r.get("accounting_month"),
+                )
+            )
+    out.sort(key=lambda x: x.date_of_emergence or "", reverse=True)
+    return out
+
+
 @router.get("/{personnel_number}/profile", response_model=EmployeeProfile)
 def get_profile(
     personnel_number: int,
@@ -236,6 +291,7 @@ def get_profile(
 ) -> EmployeeProfile:
     e = _employee_or_404(db, personnel_number)
     _ensure_datev_details_loaded(db, e)
+    absences = _fetch_recent_absences(e.personnel_number)
     return EmployeeProfile(
         personnel_number=e.personnel_number,
         full_name=e.full_name,
@@ -247,6 +303,7 @@ def get_profile(
         bank=_section_bank_from_datev(e.raw_masterdata),
         bezuege=_section_bezuege_from_datev(e.raw_masterdata),
         patti=_section_patti(e.raw_patti),
+        absences=absences,
         last_datev_synced_at=e.last_datev_synced_at.isoformat() if e.last_datev_synced_at else None,
         last_patti_synced_at=e.last_patti_synced_at.isoformat() if e.last_patti_synced_at else None,
         pending_operations=_pending_for(db, e.id),
@@ -486,6 +543,80 @@ def edit_hourly_wage(
     )
     db.commit()
     return {"queued_operation_ids": [op.id]}
+
+
+# --- AU / Krankmeldung ---------------------------------------------------
+
+
+class SicknessNoticeBody(BaseModel):
+    """Payload to record a sick-leave period.
+
+    Each calendar day in [start_date, end_date] is enqueued as its own
+    DATEV calendar-record (one row per day is the LuG convention).
+    ``salary_type_id`` defaults to 1650 (Lohnfortzahlung Std) — Daniel
+    can override per-employee if the Mandant uses a different code.
+    ``reason_for_absence_id`` defaults to "K" (Krank).
+    """
+
+    start_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    end_date: str = Field(..., pattern=r"^\d{4}-\d{2}-\d{2}$")
+    hours_per_day: float = Field(default=8.0, ge=0, le=24)
+    days_per_day: float = Field(default=1.0, ge=0, le=1)
+    salary_type_id: int = Field(default=1650)
+    reason_for_absence_id: str = Field(default="K", max_length=8)
+    note: str | None = Field(default=None, max_length=500)
+
+
+@router.post("/{personnel_number}/absences")
+def create_absence(
+    personnel_number: int,
+    body: SicknessNoticeBody,
+    user: Annotated[AuthenticatedUser, Depends(require_buchhaltung_user)],
+    db: Session = Depends(get_db),
+) -> dict:
+    """Queue calendar-record creates for each day of an absence period."""
+    from datetime import date, timedelta
+    e = _employee_or_404(db, personnel_number)
+
+    try:
+        start = date.fromisoformat(body.start_date)
+        end = date.fromisoformat(body.end_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Ungültiges Datum: {exc}") from exc
+
+    if end < start:
+        raise HTTPException(status_code=400, detail="end_date liegt vor start_date")
+    span_days = (end - start).days + 1
+    if span_days > 92:
+        raise HTTPException(status_code=400, detail="Zeitraum > 92 Tage; bitte einzeln erfassen")
+
+    queued: list[int] = []
+    for offset in range(span_days):
+        day = start + timedelta(days=offset)
+        record = {
+            "personnel_number": str(personnel_number).zfill(5),
+            "date_of_emergence": day.isoformat(),
+            "reason_for_absence_id": body.reason_for_absence_id,
+            "salary_type_id": body.salary_type_id,
+            "hours": body.hours_per_day,
+            "days": body.days_per_day,
+        }
+        op = operation_apply.enqueue(
+            db,
+            employee_id=e.id,
+            op="datev.create_calendar_record",
+            payload={"personnel_number": personnel_number, "record": record},
+            requested_by_email=user.email,
+        )
+        queued.append(op.id)
+
+    db.commit()
+    return {
+        "queued_operation_ids": queued,
+        "days": span_days,
+        "start_date": body.start_date,
+        "end_date": body.end_date,
+    }
 
 
 # --- manual Patti link --------------------------------------------------
