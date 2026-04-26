@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -13,14 +15,23 @@ from app.api import (
 )
 from app.core.logging import configure_logging
 from app.core.settings import settings
+from app.services.sync_loop import lifespan_task as sync_lifespan
 
 configure_logging()
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    async with sync_lifespan():
+        yield
+
 
 app = FastAPI(
     title="DATEV Buchungstool",
     version="0.1.0",
     docs_url="/docs" if settings.environment != "production" else None,
     redoc_url=None,
+    lifespan=lifespan,
 )
 
 app.add_middleware(
