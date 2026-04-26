@@ -19,10 +19,13 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import AuthenticatedUser, require_buchhaltung_user
 from app.core.datev_local_client import default_client_path
+from app.core.logging import get_logger
 from app.db.session import get_db
 from app.models.employee import Employee
 from app.models.pending_operation import PendingOperation
 from app.services import operation_apply
+
+logger = get_logger("datev.profile")
 
 router = APIRouter(prefix="/datev/employees", tags=["employee-profile"])
 
@@ -185,6 +188,46 @@ def _pending_for(db: Session, employee_id: int) -> list[PendingOpOut]:
 # --- profile read ---------------------------------------------------------
 
 
+def _ensure_datev_details_loaded(db: Session, e: Employee) -> None:
+    """Lazy-load DATEV detail on first profile view.
+
+    The bulk sync only fetches the thin employee list to stay fast
+    (~5s instead of 3min for 86 employees). Detail data — address,
+    account, gross-payments etc. — gets fetched when the user opens
+    a profile and is then cached in raw_masterdata."""
+    raw = e.raw_masterdata or {}
+    has_detail = any(k in raw for k in ("address", "account", "personal_data"))
+    if has_detail:
+        return  # already cached
+    try:
+        from app.core import datev_local_client
+        from datetime import datetime, timezone
+        detail = datev_local_client.get_employee(e.personnel_number)
+        # Try to also fetch address + account in parallel calls — these
+        # come from separate DATEV endpoints. Tolerate failures.
+        try:
+            detail["address"] = datev_local_client.get_address(e.personnel_number)
+        except Exception:
+            pass
+        try:
+            detail["account"] = datev_local_client.get_account(e.personnel_number)
+        except Exception:
+            pass
+        try:
+            detail["gross_payments"] = datev_local_client.list_gross_payments(e.personnel_number)
+        except Exception:
+            pass
+        try:
+            detail["hourly_wages"] = datev_local_client.list_hourly_wages(e.personnel_number)
+        except Exception:
+            pass
+        e.raw_masterdata = detail
+        e.last_datev_synced_at = datetime.now(timezone.utc)
+        db.commit()
+    except Exception as exc:  # noqa: BLE001 — never block the UI
+        logger.warning("lazy_detail_fetch_failed", pnr=e.personnel_number, error=str(exc))
+
+
 @router.get("/{personnel_number}/profile", response_model=EmployeeProfile)
 def get_profile(
     personnel_number: int,
@@ -192,6 +235,7 @@ def get_profile(
     db: Session = Depends(get_db),
 ) -> EmployeeProfile:
     e = _employee_or_404(db, personnel_number)
+    _ensure_datev_details_loaded(db, e)
     return EmployeeProfile(
         personnel_number=e.personnel_number,
         full_name=e.full_name,

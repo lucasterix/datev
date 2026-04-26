@@ -99,7 +99,7 @@ def _compute_data_hash(snapshot: dict) -> str:
 def pull_employees_from_datev(
     db: Session,
     *,
-    fetch_details: bool = True,
+    fetch_details: bool = False,
     reference_date: str | None = None,
 ) -> dict:
     """Refresh the local ``Employee`` rows from the DATEV bridge.
@@ -324,7 +324,7 @@ def pull_patti_for_linked_employees(db: Session) -> dict:
 # --- one-shot full sync ----------------------------------------------------
 
 
-def full_sync(db: Session, *, fetch_datev_details: bool = True) -> dict:
+def full_sync(db: Session, *, fetch_datev_details: bool = False) -> dict:
     """Convenience entrypoint: DATEV pull → auto-link → Patti pull.
 
     Used by the manual /sync trigger and the periodic background loop.

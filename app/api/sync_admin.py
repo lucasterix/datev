@@ -50,9 +50,14 @@ def health(
 def full_sync(
     user: Annotated[AuthenticatedUser, Depends(require_buchhaltung_user)],
     db: Session = Depends(get_db),
-    fetch_datev_details: bool = True,
+    fetch_datev_details: bool = False,
 ) -> dict:
-    """Pull DATEV → auto-link → pull Patti."""
+    """Pull DATEV → auto-link → pull Patti.
+
+    By default ``fetch_datev_details=False`` — we only pull the thin
+    list (Name, Personalnummer, Eintrittsdatum). Per-employee details
+    are loaded lazily when the user opens the profile (avoids ~3min
+    sequential 86-employee detail loop that was timing out)."""
     return sync_service.full_sync(db, fetch_datev_details=fetch_datev_details)
 
 
