@@ -35,6 +35,18 @@ class Settings(BaseSettings):
     datev_client_number: str = ""
     datev_default_client_id_path: str = ""  # e.g. "1694291-10357"
 
+    # === DATEV local bridge (Tailscale + Python reverse-proxy on LuG-PC) ===
+    # Reaches the on-premise DATEVconnect API (lohn-api-v3 a.k.a. Payroll-3.1.4).
+    # Empty string = bridge disabled (cloud-only mode for local dev).
+    datev_local_bridge_url: str = ""
+
+    # === Patti (https://patti.app) ===
+    # Form-login auth, see app/clients/patti_client.py for the protocol.
+    patti_base_url: str = "https://patti.app"
+    patti_login_email: str = ""
+    patti_login_password: str = ""
+    patti_timeout_seconds: float = 15.0
+
     @property
     def datev_scopes_list(self) -> list[str]:
         return [s.strip() for s in self.datev_scopes.split() if s.strip()]

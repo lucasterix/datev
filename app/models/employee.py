@@ -47,10 +47,22 @@ class Employee(Base):
 
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
 
-    # === full DATEV payload ===
-    raw_masterdata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    # === Patti link (resolved by name+born_at match or manual mapping) ===
+    patti_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    patti_person_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    # ``manual`` if a human confirmed the link in the UI, ``auto`` if our
+    # matching heuristic resolved it, ``unmatched`` if no link yet.
+    patti_link_state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="unmatched"
+    )
 
-    # === Edit-queue ===
+    # === full DATEV payload + Patti snapshot ===
+    raw_masterdata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    raw_patti: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    # === Edit-queue (legacy small queue from Phase 0) ===
+    # Free-form editing fields; the new pending_operations table is the
+    # canonical place for queued writes to DATEV/Patti.
     pending_changes: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     pending_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -58,6 +70,14 @@ class Employee(Base):
     last_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_sync_status: Mapped[str | None] = mapped_column(String(16), nullable=True)  # ok | error | never
     last_sync_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # When did Patti say it last changed this person? Drives last-write-wins.
+    patti_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_patti_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Hash of the DATEV-side snapshot — DATEV's API doesn't expose
+    # updated_at, so we fingerprint the payload to detect changes.
+    datev_data_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_datev_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

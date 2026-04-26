@@ -1,7 +1,16 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import datev_debug, datev_oauth, employees, health, me_echo, payroll
+from app.api import (
+    datev_debug,
+    datev_oauth,
+    employees,
+    health,
+    me_echo,
+    payroll,
+    profile,
+    sync_admin,
+)
 from app.core.logging import configure_logging
 from app.core.settings import settings
 
@@ -28,3 +37,5 @@ app.include_router(datev_oauth.router)
 app.include_router(datev_debug.router)
 app.include_router(employees.router)
 app.include_router(payroll.router)
+app.include_router(profile.router)
+app.include_router(sync_admin.router)
