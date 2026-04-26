@@ -25,9 +25,12 @@ import asyncio
 import contextlib
 from datetime import datetime, timezone
 
+from sqlalchemy import func, or_, select
+
 from app.core import datev_local_client
 from app.core.logging import get_logger
 from app.db.session import SessionLocal
+from app.models.pending_operation import PendingOperation
 from app.services import operation_apply, sync as sync_service
 
 logger = get_logger("datev.sync_loop")
@@ -40,18 +43,33 @@ PATTI_PULL_INTERVAL = 600  # 10 min
 
 
 async def _drain_once() -> None:
-    """One drain pass — never raises out, all logged."""
+    """One drain pass — never raises out, all logged.
+
+    Cheap pre-check: only run the actual drain if something is due,
+    so an idle queue doesn't churn the DB.
+    """
     try:
         with SessionLocal() as db:
-            result = operation_apply.drain(db, max_ops=20)
-            if result["total"]:
-                logger.info(
-                    "sync_loop_drain",
-                    total=result["total"],
-                    done=result.get("done", 0),
-                    retry=result.get("retry", 0),
-                    error=result.get("error", 0),
+            now = datetime.now(timezone.utc)
+            due = db.execute(
+                select(func.count(PendingOperation.id)).where(
+                    PendingOperation.status == "pending",
+                    or_(
+                        PendingOperation.not_before.is_(None),
+                        PendingOperation.not_before <= now,
+                    ),
                 )
+            ).scalar()
+            if not due:
+                return  # idle — nothing to do
+            result = operation_apply.drain(db, max_ops=20)
+            logger.info(
+                "sync_loop_drain",
+                total=result["total"],
+                done=result.get("done", 0),
+                retry=result.get("retry", 0),
+                error=result.get("error", 0),
+            )
     except Exception:  # noqa: BLE001 — keep loop alive
         logger.exception("sync_loop_drain_error")
 
