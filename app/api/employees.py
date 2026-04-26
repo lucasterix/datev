@@ -39,9 +39,12 @@ class EmployeeOut(BaseModel):
     pending_since: str | None
     last_synced_at: str | None
     last_sync_status: str | None
+    patti_link_state: str  # "unmatched" | "auto" | "manual"
+    patti_person_id: int | None
+    pending_op_count: int
 
     @classmethod
-    def from_row(cls, e: Employee) -> "EmployeeOut":
+    def from_row(cls, e: Employee, pending_op_count: int = 0) -> "EmployeeOut":
         return cls(
             id=e.id,
             personnel_number=e.personnel_number,
@@ -61,6 +64,9 @@ class EmployeeOut(BaseModel):
             pending_since=e.pending_since.isoformat() if e.pending_since else None,
             last_synced_at=e.last_synced_at.isoformat() if e.last_synced_at else None,
             last_sync_status=e.last_sync_status,
+            patti_link_state=e.patti_link_state,
+            patti_person_id=e.patti_person_id,
+            pending_op_count=pending_op_count,
         )
 
 
@@ -81,12 +87,25 @@ def list_employees(
     ``date_of_termination_of_employment`` drives that flag during sync.
     Pass ``?include_inactive=true`` to see everyone (e.g. for searching
     a former employee's record)."""
+    from app.models.pending_operation import PendingOperation
+    from sqlalchemy import func
+
     query = select(Employee).where(Employee.client_id_path == default_client_path())
     if not include_inactive:
         query = query.where(Employee.is_active.is_(True))
     query = query.order_by(Employee.surname, Employee.first_name, Employee.personnel_number)
     rows = db.execute(query).scalars().all()
-    return [EmployeeOut.from_row(e) for e in rows]
+
+    # Pending-op count per employee (only operations the user can act on)
+    op_counts: dict[int, int] = dict(
+        db.execute(
+            select(PendingOperation.employee_id, func.count(PendingOperation.id))
+            .where(PendingOperation.status.in_(("pending", "in_progress", "error")))
+            .group_by(PendingOperation.employee_id)
+        ).all()
+    )
+
+    return [EmployeeOut.from_row(e, op_counts.get(e.id, 0)) for e in rows]
 
 
 @router.get("/{personnel_number}", response_model=EmployeeDetail)
