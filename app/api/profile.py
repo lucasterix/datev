@@ -202,17 +202,24 @@ def _pending_for(db: Session, employee_id: int) -> list[PendingOpOut]:
 # --- profile read ---------------------------------------------------------
 
 
-def _ensure_datev_details_loaded(db: Session, e: Employee) -> None:
+def _ensure_datev_details_loaded(db: Session, e: Employee, bridge_online: bool) -> None:
     """Lazy-load DATEV detail on first profile view.
 
     The bulk sync only fetches the thin employee list to stay fast
     (~5s instead of 3min for 86 employees). Detail data — address,
     account, gross-payments etc. — gets fetched when the user opens
-    a profile and is then cached in raw_masterdata."""
+    a profile and is then cached in raw_masterdata.
+
+    If the bridge is offline (``bridge_online=False``), we serve
+    whatever is already in raw_masterdata and skip all DATEV calls so
+    the profile loads instantly even when the LuG-PC is off.
+    """
     raw = e.raw_masterdata or {}
     has_detail = any(k in raw for k in ("address", "account", "personal_data"))
     if has_detail:
         return  # already cached
+    if not bridge_online:
+        return  # no point trying — would just timeout
     try:
         from app.core import datev_local_client
         from datetime import datetime, timezone
@@ -242,14 +249,24 @@ def _ensure_datev_details_loaded(db: Session, e: Employee) -> None:
         logger.warning("lazy_detail_fetch_failed", pnr=e.personnel_number, error=str(exc))
 
 
-def _fetch_recent_absences(personnel_number: int, months_back: int = 2) -> list[CalendarRecordOut]:
+def _fetch_recent_absences(
+    personnel_number: int,
+    bridge_online: bool,
+    months_back: int = 2,
+) -> list[CalendarRecordOut]:
     """Pull the last N months of calendar-records for this employee
     and keep only entries that look like absences (have a reason).
 
     DATEV's calendar-records endpoint returns entries whose Zuordnungsmonat
     matches the reference-date month, so we have to call it per month.
     Two months covers most active sick-notes; older periods are
-    historical and live in the LuG ASCII archive."""
+    historical and live in the LuG ASCII archive.
+
+    Returns empty list when ``bridge_online=False`` so the profile
+    loads instantly even if the LuG-PC is off."""
+    if not bridge_online:
+        return []
+
     from app.core import datev_local_client
     from datetime import date as _date
     from dateutil.relativedelta import relativedelta  # type: ignore[import-not-found]
@@ -289,9 +306,15 @@ def get_profile(
     user: Annotated[AuthenticatedUser, Depends(require_buchhaltung_user)],
     db: Session = Depends(get_db),
 ) -> EmployeeProfile:
+    from app.core import datev_local_client
     e = _employee_or_404(db, personnel_number)
-    _ensure_datev_details_loaded(db, e)
-    absences = _fetch_recent_absences(e.personnel_number)
+    # Single 3s probe to decide whether to bother with DATEV calls.
+    # Bridge offline → serve whatever's cached in DB, skip all live
+    # calls. Profile renders instantly instead of waiting on multiple
+    # 30s timeouts.
+    bridge_online = datev_local_client.ping()
+    _ensure_datev_details_loaded(db, e, bridge_online)
+    absences = _fetch_recent_absences(e.personnel_number, bridge_online)
     return EmployeeProfile(
         personnel_number=e.personnel_number,
         full_name=e.full_name,
