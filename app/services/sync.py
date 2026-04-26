@@ -96,6 +96,34 @@ def _compute_data_hash(snapshot: dict) -> str:
 # --- DATEV pull -----------------------------------------------------------
 
 
+def _build_termination_lookup(reference_date: str | None) -> dict[int, date | None]:
+    """Map personnel_number -> latest termination date.
+
+    A single ``/employment-periods`` call gives us the date_of_termination
+    for the whole tenant. The thin employee list endpoint omits this
+    field, so we used to flag everyone as active; now we know who left."""
+    try:
+        periods = datev_local_client.list_employment_periods(reference_date=reference_date)
+    except LocalDatevError as exc:
+        logger.warning("employment_periods_fetch_failed", status=exc.status_code)
+        return {}
+
+    out: dict[int, date | None] = {}
+    for p in periods:
+        try:
+            pnr = int(str(p.get("personnel_number")))
+        except (ValueError, TypeError):
+            continue
+        end = _parse_iso(p.get("date_of_termination_of_employment"))
+        # Keep the latest termination date (a person can have multiple
+        # employment periods stacked — only the latest is what we care about
+        # for "currently working")
+        existing = out.get(pnr)
+        if existing is None or (end and end > existing):
+            out[pnr] = end
+    return out
+
+
 def pull_employees_from_datev(
     db: Session,
     *,
@@ -120,6 +148,9 @@ def pull_employees_from_datev(
         logger.error("datev_pull_failed", status=exc.status_code, body=exc.body)
         return {"ok": False, "error": str(exc), "status": exc.status_code}
 
+    # One batch call to figure out who has terminated employment.
+    termination = _build_termination_lookup(reference_date)
+
     created = 0
     updated = 0
     detail_failures = 0
@@ -137,8 +168,12 @@ def pull_employees_from_datev(
                 detail_failures += 1
                 logger.warning("datev_employee_detail_failed",
                                pnr=pnr, status=exc.status_code)
-                # Fall back to thin record
                 full = thin
+
+        # Inject termination date so _upsert sees it on thin records too.
+        if pnr in termination and termination[pnr] is not None:
+            full = dict(full)
+            full["date_of_termination_of_employment"] = termination[pnr].isoformat()
 
         row, was_new = _upsert_employee_from_datev(db, client_id_path, pnr, full)
         if was_new:

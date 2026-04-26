@@ -171,6 +171,16 @@ def get_employee(personnel_number: int | str, *, reference_date: str | None = No
     )
 
 
+def list_employment_periods(*, reference_date: str | None = None) -> list[dict]:
+    """All employment periods for the tenant. Cheap one-call source of
+    truth for who is ausgeschieden — entries with
+    ``date_of_termination_of_employment`` <= today have left."""
+    return get(
+        f"/clients/{default_client_path()}/employment-periods",
+        params={"reference-date": reference_date} if reference_date else None,
+    ) or []
+
+
 # --- contact (Adresse) ----------------------------------------------------
 
 

@@ -73,12 +73,19 @@ class EmployeeDetail(EmployeeOut):
 def list_employees(
     user: Annotated[AuthenticatedUser, Depends(require_buchhaltung_user)],
     db: Session = Depends(get_db),
+    include_inactive: bool = False,
 ) -> list[EmployeeOut]:
-    rows = db.execute(
-        select(Employee)
-        .where(Employee.client_id_path == default_client_path())
-        .order_by(Employee.surname, Employee.first_name, Employee.personnel_number)
-    ).scalars().all()
+    """List employees of the current tenant.
+
+    Default: only currently-employed (``is_active=True``). DATEV's
+    ``date_of_termination_of_employment`` drives that flag during sync.
+    Pass ``?include_inactive=true`` to see everyone (e.g. for searching
+    a former employee's record)."""
+    query = select(Employee).where(Employee.client_id_path == default_client_path())
+    if not include_inactive:
+        query = query.where(Employee.is_active.is_(True))
+    query = query.order_by(Employee.surname, Employee.first_name, Employee.personnel_number)
+    rows = db.execute(query).scalars().all()
     return [EmployeeOut.from_row(e) for e in rows]
 
 
