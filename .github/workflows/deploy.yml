@@ -34,8 +34,20 @@ jobs:
 
             docker compose build
 
-            # Migrations (container is clean, external network is attached fresh)
-            docker compose run --rm datev_api alembic upgrade head
+            # Migrations. The external staging_fzr_net is sometimes
+            # not ready for DNS lookups immediately after `down`, so
+            # retry a couple of times before giving up.
+            for attempt in 1 2 3; do
+              if docker compose run --rm datev_api alembic upgrade head; then
+                break
+              fi
+              if [ "$attempt" = "3" ]; then
+                echo "Migration failed after 3 attempts" >&2
+                exit 1
+              fi
+              echo "Migration attempt $attempt failed, retrying in 5s..." >&2
+              sleep 5
+            done
 
             docker compose up -d --wait
             docker compose ps
