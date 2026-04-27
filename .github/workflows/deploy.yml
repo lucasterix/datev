@@ -34,13 +34,15 @@ jobs:
 
             docker compose build
 
-            # === Diagnose: where is fzr_postgres? ===
-            echo "=== docker networks ==="
-            docker network ls | grep -E "fzr|staging|caddy" || true
-            echo "=== fzr_postgres state + networks ==="
-            docker inspect fzr_postgres --format 'state={{.State.Status}} networks={{range $k,$v := .NetworkSettings.Networks}}{{$k}}={{$v.IPAddress}} {{end}}' 2>&1 || echo "fzr_postgres container not found"
-            echo "=== staging_fzr_net containers ==="
-            docker network inspect staging_fzr_net --format '{{range .Containers}}{{.Name}} {{.IPv4Address}}{{println}}{{end}}' 2>&1 || true
+            # === Diagnose: who actually serves the DB? ===
+            echo "=== all containers ==="
+            docker ps -a --format '{{.Names}}\t{{.Image}}\t{{.Status}}'
+            echo "=== all networks ==="
+            docker network ls
+            echo "=== staging_fzr_net containers (with aliases) ==="
+            docker network inspect staging_fzr_net 2>&1 | head -80 || true
+            echo "=== Postgres-like containers ==="
+            docker ps -a --format '{{.Names}}\t{{.Image}}' | grep -iE "postgres|pg" || echo "no postgres containers"
 
             # Migrations. Use container_name (fzr_postgres) since the
             # `postgres` service alias is scoped to the FZR compose
