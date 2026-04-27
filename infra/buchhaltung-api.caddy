@@ -1,0 +1,4 @@
+buchhaltung-api.froehlichdienste.de {
+    encode zstd gzip
+    reverse_proxy datev_api:8000
+}

@@ -21,7 +21,11 @@ services:
     logging: *default-logging
     networks:
       - staging_fzr_net
+      - caddy_proxy
 
 networks:
   staging_fzr_net:
     external: true
+  caddy_proxy:
+    external: true
+    name: caddy_proxy

@@ -39,3 +39,12 @@ jobs:
 
             docker compose up -d --wait
             docker compose ps
+
+            # Drop the Caddy site block for buchhaltung-api into the
+            # shared conf.d that fzr_caddy mounts read-only, then ask
+            # Caddy to reload. Idempotent: cmp avoids unnecessary reloads.
+            mkdir -p /home/deploy/infra/caddy/conf.d
+            if ! cmp -s infra/buchhaltung-api.caddy /home/deploy/infra/caddy/conf.d/buchhaltung-api.caddy; then
+              cp infra/buchhaltung-api.caddy /home/deploy/infra/caddy/conf.d/buchhaltung-api.caddy
+              docker exec fzr_caddy caddy reload --config /etc/caddy/Caddyfile
+            fi
