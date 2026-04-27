@@ -34,20 +34,14 @@ jobs:
 
             docker compose build
 
-            # Migrations. The external staging_fzr_net is sometimes
-            # not ready for DNS lookups immediately after `down`, so
-            # retry a couple of times before giving up.
-            for attempt in 1 2 3; do
-              if docker compose run --rm datev_api alembic upgrade head; then
-                break
-              fi
-              if [ "$attempt" = "3" ]; then
-                echo "Migration failed after 3 attempts" >&2
-                exit 1
-              fi
-              echo "Migration attempt $attempt failed, retrying in 5s..." >&2
-              sleep 5
-            done
+            # Migrations. From a `compose run --rm` container, the
+            # FZR-stack service-name "postgres" doesn't always resolve
+            # (it's an alias of the FZR compose project, not ours), so
+            # we override DATABASE_URL to use the container_name
+            # `fzr_postgres` which is globally resolvable on the
+            # staging_fzr_net network.
+            DB_URL_OVERRIDE=$(grep -E '^DATABASE_URL=' .env | head -1 | sed 's|@postgres:|@fzr_postgres:|' | cut -d= -f2-)
+            docker compose run --rm -e "DATABASE_URL=$DB_URL_OVERRIDE" datev_api alembic upgrade head
 
             docker compose up -d --wait
             docker compose ps
